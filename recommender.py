@@ -140,6 +140,13 @@ def recommend_full(data):
         },
     }
 def load_models_safely():
-    global interpreter_diet, interpreter_int, scaler_X, heart_model
+    global scaler_X, heart_model, interpreter_diet, interpreter_int
 
-    print("📁 CONTENIDO DE ./models:", os.listdir(MODEL_DIR))
+    print("📂 Listando archivos en /app:")
+    print(os.listdir("/app"))
+
+    print("📂 Listando archivos en /app/models:")
+    try:
+        print(os.listdir("/app/models"))
+    except:
+        print("❌ NO EXISTE /app/models")
