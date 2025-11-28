@@ -20,4 +20,4 @@ async def recommend(payload: dict):
 
 @app.get("/")
 async def home():
-    return {"status": "ok", "msg": "VersusMe AI is running"}
+    return {"status": "ok", "msg": "VersusMe AI is running"} 
