@@ -3,6 +3,7 @@ import numpy as np
 import joblib
 import tensorflow as tf
 import pandas as pd
+import tflite_runtime.interpreter as tflite
 
 # =========================================================
 #  🔹 RUTA BASE DE MODELOS
@@ -13,15 +14,12 @@ model_dir = os.path.dirname(__file__)
 # =========================================================
 #  🔹 CARGAR MODELOS ANFIS (TFLite)
 # =========================================================
-interpreter_int = tf.lite.Interpreter(
-    model_path=os.path.join(model_dir, "anfis_int.tflite")
-)
+interpreter_int = tflite.Interpreter(model_path=os.path.join(model_dir, "anfis_int.tflite"))
 interpreter_int.allocate_tensors()
 
-interpreter_diet = tf.lite.Interpreter(
-    model_path=os.path.join(model_dir, "anfis_diet.tflite")
-)
+interpreter_diet = tflite.Interpreter(model_path=os.path.join(model_dir, "anfis_diet.tflite"))
 interpreter_diet.allocate_tensors()
+
 
 
 def anfis_predict(interpreter, x):

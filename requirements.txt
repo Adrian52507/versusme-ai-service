@@ -1,7 +1,7 @@
 fastapi
 uvicorn
-numpy==1.26.4
-pandas
+numpy==1.23.5
+pandas==1.5.3
 joblib
-scikit-learn==1.5.2
-tensorflow==2.20.0
+scikit-learn==1.2.2
+tflite-runtime==2.12.0
