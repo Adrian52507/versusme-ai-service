@@ -1,157 +1,120 @@
-import os
 import numpy as np
+import os
 import joblib
 import pandas as pd
 
-# -------------------------
-# Import TFLite interpreter (Railway) OR TensorFlow (Windows)
-# -------------------------
+# Intentar usar tflite_runtime; si falla, usar tensorflow.lite
 try:
     from tflite_runtime.interpreter import Interpreter
     print("Using tflite_runtime")
 except ImportError:
-    import tensorflow as tf
-    Interpreter = tf.lite.Interpreter
-    print("Using TensorFlow's Interpreter")
+    from tensorflow.lite import Interpreter
+    print("Using tensorflow.lite")
 
-MODEL_DIR = os.path.join(os.path.dirname(__file__), "models")
+MODEL_DIR = "./models"
 
-def load_models_safely():
-    print("🔍 Cargando modelos desde:", MODEL_DIR)
-
-    # TFLITE
-    global interpreter_int, interpreter_diet
-    interpreter_int = Interpreter(model_path=os.path.join(MODEL_DIR, "anfis_int.tflite"))
-    interpreter_int.allocate_tensors()
-
-    interpreter_diet = Interpreter(model_path=os.path.join(MODEL_DIR, "anfis_diet.tflite"))
-    interpreter_diet.allocate_tensors()
-
-    # JOBLIB
-    global scaler_X, clf, heart_cols
-    scaler_X = joblib.load(os.path.join(MODEL_DIR, "scaler_X.joblib"))
-    clf = joblib.load(os.path.join(MODEL_DIR, "heart_clf.joblib"))
-    heart_cols = joblib.load(os.path.join(MODEL_DIR, "heart_cols.joblib"))
-
-
-# Variables globales (inicializadas en load_models_safely)
+interpreter_cal = None
 interpreter_int = None
-interpreter_diet = None
-scaler_X = None
-clf = None
-heart_cols = None
 
 
-# ------------------------------------------
-# CARGA SEGURA DE MODELOS (Railway compatible)
-# ------------------------------------------
+# 🔹 Cargar modelo TFLite ANFIS de forma segura
 def load_models_safely():
-    global interpreter_int, interpreter_diet, scaler_X, clf, heart_cols
+    global interpreter_cal, interpreter_int
+
+    if interpreter_cal is None:
+        interpreter_cal = Interpreter(
+            model_path=os.path.join(MODEL_DIR, "anfis_cal.tflite")
+        )
+        interpreter_cal.allocate_tensors()
 
     if interpreter_int is None:
-        interpreter_int = Interpreter(model_path=os.path.join(MODEL_DIR, "anfis_int.tflite"))
+        interpreter_int = Interpreter(
+            model_path=os.path.join(MODEL_DIR, "anfis_int.tflite")
+        )
         interpreter_int.allocate_tensors()
 
-    if interpreter_diet is None:
-        interpreter_diet = Interpreter(model_path=os.path.join(MODEL_DIR, "anfis_diet.tflite"))
-        interpreter_diet.allocate_tensors()
 
-    if scaler_X is None:
-        scaler_X = joblib.load(os.path.join(MODEL_DIR, "scaler_X.joblib"))
-
-    if clf is None:
-        clf = joblib.load(os.path.join(MODEL_DIR, "heart_clf.joblib"))
-
-    if heart_cols is None:
-        try:
-            heart_cols = joblib.load(os.path.join(MODEL_DIR, "heart_cols.joblib"))
-        except:
-            heart_cols = None
+# 🔹 Calcular BMR (Harris-Benedict)
+def compute_bmr(gender, weight, height, age):
+    if gender == "M":
+        return 88.36 + (13.4 * weight) + (4.8 * height) - (5.7 * age)
+    else:
+        return 447.6 + (9.2 * weight) + (3.1 * height) - (4.3 * age)
 
 
-# -------------------------
-# ANFIS PREDICTOR
-# -------------------------
-def anfis_predict(interpreter, x):
-    input_details = interpreter.get_input_details()
-    output_details = interpreter.get_output_details()
-    interpreter.set_tensor(input_details[0]['index'], x.astype(np.float32))
-    interpreter.invoke()
-    return interpreter.get_tensor(output_details[0]['index'])[0, 0]
+# 🔹 Recomendación completa (ejercicio + dieta + calorías)
+def recommend_full(payload):
+    load_models_safely()
 
+    gender = payload["gender"]
+    age = payload["age"]
+    height = payload["height_cm"]
+    weight = payload["weight_kg"]
+    activity = payload["activity_0_4"]
+    goal = payload["goal_str"]
 
-# -------------------------
-# FUNCIÓN PRINCIPAL IA
-# -------------------------
-def recommend_full(gender_str, age, height_cm, weight_kg, activity_0_4, goal_str):
-    # Cálculos básicos cuerpo
-    bmi = weight_kg / ((height_cm / 100) ** 2)
-    bmr = 10 * weight_kg + 6.25 * height_cm - 5 * age + (5 if gender_str.lower()[0] == 'm' else -161)
-    PAL = [1.2, 1.375, 1.55, 1.725, 1.9][activity_0_4]
-    tdee = bmr * PAL
+    # ⭐ BMI
+    bmi = weight / ((height / 100) ** 2)
 
-    goal_map = {'fat_burn': -400, 'maintain': 0, 'muscle_gain': 400}
-    kcal = tdee + goal_map.get(goal_str, 0)
+    # ⭐ BMR
+    bmr = compute_bmr(gender, weight, height, age)
 
-    # Vector ANFIS
-    gender_num = 0 if gender_str.lower()[0] == 'm' else 1
-    goal_num = {'fat_burn': 0, 'maintain': 1, 'muscle_gain': 2}.get(goal_str, 1)
+    # ⭐ TDEE base (factor actividad estándar)
+    tdee = bmr * (1.2 + 0.15 * activity)
 
-    x_raw = np.array([[gender_num, age, height_cm, weight_kg, activity_0_4, goal_num, bmi]])
-    x_cont = scaler_X.transform(x_raw[:, [1, 2, 3, 6]])
-    x_cat = x_raw[:, [0, 4, 5]]
-    x_in = np.concatenate([x_cont, x_cat], axis=1).astype(np.float32)
+    # ----------- ANFIS para calorías -----------
+    cal_input = np.array([[age, height, weight, activity]], dtype=np.float32)
 
-    # Predicciones
-    c_int = int(np.clip(np.rint(anfis_predict(interpreter_int, x_in)), 0, 2))
-    c_diet = int(np.clip(np.rint(anfis_predict(interpreter_diet, x_in)), 0, 2))
+    cal_i = interpreter_cal.get_input_details()[0]
+    cal_o = interpreter_cal.get_output_details()[0]
 
-    INT2TXT = ['Ligero', 'Moderado', 'Intenso']
-    DIET2TXT = ['Hipocalórica', 'Balanceada', 'Proteica']
+    interpreter_cal.set_tensor(cal_i["index"], cal_input)
+    interpreter_cal.invoke()
+    cal_pred = float(interpreter_cal.get_tensor(cal_o["index"])[0][0])
 
-    # Riesgo cardiaco
-    df = build_heart_features(age, gender_str, bmi, activity_0_4)
-    p_hd = float(clf.predict_proba(df)[0, 1])
-    risk = 'Bajo' if p_hd < 0.12 else 'Medio' if p_hd < 0.25 else 'Alto'
+    if goal == "fat_burn":
+        target_kcal = cal_pred - 350
+        diet_type = "Déficit moderado"
+    elif goal == "muscle_gain":
+        target_kcal = cal_pred + 250
+        diet_type = "Superávit controlado"
+    else:
+        target_kcal = cal_pred
+        diet_type = "Mantenimiento"
 
+    # ----------- ANFIS para intensidad ejercicio -----------
+    int_input = np.array([[age, weight, activity]], dtype=np.float32)
+    int_i = interpreter_int.get_input_details()[0]
+    int_o = interpreter_int.get_output_details()[0]
+
+    interpreter_int.set_tensor(int_i["index"], int_input)
+    interpreter_int.invoke()
+    intensity_pred = float(interpreter_int.get_tensor(int_o["index"])[0][0])
+
+    # Mapear intensidad a palabra
+    if intensity_pred < 0.4:
+        intensity = "Baja"
+        note = "Entrenamientos suaves, ideal para iniciar."
+    elif intensity_pred < 0.7:
+        intensity = "Media"
+        note = "Entrenamientos balanceados 3-4 veces por semana."
+    else:
+        intensity = "Alta"
+        note = "Entrenamientos intensos, apto para usuarios avanzados."
+
+    # ----------- RESPUESTA FINAL (sin heart_risk) -----------
     return {
         "exercise": {
-            "intensity": INT2TXT[c_int],
-            "note": intensity_note(c_int),
+            "intensity": intensity,
+            "note": note
         },
         "diet": {
-            "type": DIET2TXT[c_diet],
-            "calorie_target_kcal": int(round(kcal)),
-        },
-        "heart_risk": {
-            "prob": round(p_hd, 3),
-            "bucket": risk,
+            "type": diet_type,
+            "calorie_target_kcal": int(target_kcal)
         },
         "body": {
             "bmi": round(bmi, 2),
-            "bmr": round(bmr, 1),
-            "tdee": round(tdee, 1),
+            "bmr": int(bmr),
+            "tdee": int(tdee)
         }
     }
-
-
-# -------------------------
-# HELPERS (necesarios)
-# -------------------------
-def intensity_note(level):
-    if level == 0:
-        return "Inicia suave: 2–3 sesiones/semana."
-    if level == 1:
-        return "Mantén 3–4 sesiones/semana."
-    return "Planifica 4–5 sesiones/semana plus intervalos."
-
-
-def build_heart_features(age, gender, bmi, activity, cols=None):
-    sex = 'Male' if gender.lower().startswith('m') else 'Female'
-    df = pd.DataFrame([{
-        "BMI": bmi,
-        "Sex": sex,
-        "AgeCategory": "18-24" if age < 25 else "25-29",
-        "PhysicalActivity": "Yes" if activity > 0 else "No",
-    }])
-    return df

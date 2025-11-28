@@ -1,32 +1,23 @@
 from fastapi import FastAPI
-import json
-import os
+from fastapi.middleware.cors import CORSMiddleware
+from recommender import recommend_full
 
 app = FastAPI()
 
-from recommender import load_models_safely, recommend_full
-
-# Modelos se cargan la primera vez que alguien llama a /recommend
-models_loaded = False
+# Permitir CORS (Vercel → Railway)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],   # Luego puedes poner tu dominio específico
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.post("/recommend")
-async def recommend(data: dict):
-
-    global models_loaded
-    if not models_loaded:
-        load_models_safely()
-        models_loaded = True
-
-    result = recommend_full(
-        data["gender"],
-        data["age"],
-        data["height_cm"],
-        data["weight_kg"],
-        data["activity_0_4"],
-        data["goal_str"]
-    )
-    return result
+async def recommend(payload: dict):
+    """ Recibe el JSON del frontend y devuelve la recomendación completa """
+    return recommend_full(payload)
 
 @app.get("/")
-async def root():
-    return {"status": "ok", "message": "IA running"}
+async def home():
+    return {"status": "ok", "msg": "VersusMe AI is running"}
