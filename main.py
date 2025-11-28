@@ -1,10 +1,20 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
 from recommender import recommend_full
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 
-class RequestModel(BaseModel):
+# Permitir requests desde tu backend Node
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # cámbialo si quieres limitar
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+class UserInput(BaseModel):
     gender: str
     age: int
     height_cm: int
@@ -12,8 +22,8 @@ class RequestModel(BaseModel):
     activity_0_4: int
     goal_str: str
 
-@app.post("/recommend")
-def recommend(data: RequestModel):
+@app.post("/predict_full")
+def predict(data: UserInput):
     result = recommend_full(
         data.gender,
         data.age,
@@ -26,4 +36,4 @@ def recommend(data: RequestModel):
 
 @app.get("/")
 def root():
-    return {"status": "IA microservice running"}
+    return {"msg": "IA service running!"}
