@@ -2,10 +2,37 @@ import os
 import numpy as np
 import joblib
 import pandas as pd
-from tflite_runtime.interpreter import Interpreter
 
-# Ruta a los modelos
-model_dir = os.path.dirname(__file__)
+# -------------------------
+# Import TFLite interpreter (Railway) OR TensorFlow (Windows)
+# -------------------------
+try:
+    from tflite_runtime.interpreter import Interpreter
+    print("Using tflite_runtime")
+except ImportError:
+    import tensorflow as tf
+    Interpreter = tf.lite.Interpreter
+    print("Using TensorFlow's Interpreter")
+
+MODEL_DIR = os.path.join(os.path.dirname(__file__), "models")
+
+def load_models_safely():
+    print("🔍 Cargando modelos desde:", MODEL_DIR)
+
+    # TFLITE
+    global interpreter_int, interpreter_diet
+    interpreter_int = Interpreter(model_path=os.path.join(MODEL_DIR, "anfis_int.tflite"))
+    interpreter_int.allocate_tensors()
+
+    interpreter_diet = Interpreter(model_path=os.path.join(MODEL_DIR, "anfis_diet.tflite"))
+    interpreter_diet.allocate_tensors()
+
+    # JOBLIB
+    global scaler_X, clf, heart_cols
+    scaler_X = joblib.load(os.path.join(MODEL_DIR, "scaler_X.joblib"))
+    clf = joblib.load(os.path.join(MODEL_DIR, "heart_clf.joblib"))
+    heart_cols = joblib.load(os.path.join(MODEL_DIR, "heart_cols.joblib"))
+
 
 # Variables globales (inicializadas en load_models_safely)
 interpreter_int = None
@@ -22,22 +49,22 @@ def load_models_safely():
     global interpreter_int, interpreter_diet, scaler_X, clf, heart_cols
 
     if interpreter_int is None:
-        interpreter_int = Interpreter(model_path=os.path.join(model_dir, "anfis_int.tflite"))
+        interpreter_int = Interpreter(model_path=os.path.join(MODEL_DIR, "anfis_int.tflite"))
         interpreter_int.allocate_tensors()
 
     if interpreter_diet is None:
-        interpreter_diet = Interpreter(model_path=os.path.join(model_dir, "anfis_diet.tflite"))
+        interpreter_diet = Interpreter(model_path=os.path.join(MODEL_DIR, "anfis_diet.tflite"))
         interpreter_diet.allocate_tensors()
 
     if scaler_X is None:
-        scaler_X = joblib.load(os.path.join(model_dir, "scaler_X.joblib"))
+        scaler_X = joblib.load(os.path.join(MODEL_DIR, "scaler_X.joblib"))
 
     if clf is None:
-        clf = joblib.load(os.path.join(model_dir, "heart_clf.joblib"))
+        clf = joblib.load(os.path.join(MODEL_DIR, "heart_clf.joblib"))
 
     if heart_cols is None:
         try:
-            heart_cols = joblib.load(os.path.join(model_dir, "heart_cols.joblib"))
+            heart_cols = joblib.load(os.path.join(MODEL_DIR, "heart_cols.joblib"))
         except:
             heart_cols = None
 
