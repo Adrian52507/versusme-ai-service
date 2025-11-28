@@ -3,7 +3,7 @@ import joblib
 import os
 from tflite_runtime.interpreter import Interpreter
 
-MODEL_DIR = "/app/models"   # ruta correcta para Railway
+MODEL_DIR = os.path.dirname(__file__)  # ruta correcta para Railway
 
 # VARIABLES GLOBALES
 interpreter_diet = None
