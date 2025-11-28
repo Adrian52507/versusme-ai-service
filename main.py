@@ -1,39 +1,32 @@
 from fastapi import FastAPI
-from pydantic import BaseModel
-from recommender import recommend_full
-from fastapi.middleware.cors import CORSMiddleware
+import json
+import os
 
 app = FastAPI()
 
-# Permitir requests desde tu backend Node
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # cámbialo si quieres limitar
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+from recommender import load_models_safely, recommend_full
 
-class UserInput(BaseModel):
-    gender: str
-    age: int
-    height_cm: int
-    weight_kg: int
-    activity_0_4: int
-    goal_str: str
+# Modelos se cargan la primera vez que alguien llama a /recommend
+models_loaded = False
 
-@app.post("/predict_full")
-def predict(data: UserInput):
+@app.post("/recommend")
+async def recommend(data: dict):
+
+    global models_loaded
+    if not models_loaded:
+        load_models_safely()
+        models_loaded = True
+
     result = recommend_full(
-        data.gender,
-        data.age,
-        data.height_cm,
-        data.weight_kg,
-        data.activity_0_4,
-        data.goal_str
+        data["gender"],
+        data["age"],
+        data["height_cm"],
+        data["weight_kg"],
+        data["activity_0_4"],
+        data["goal_str"]
     )
     return result
 
 @app.get("/")
-def root():
-    return {"msg": "IA service running!"}
+async def root():
+    return {"status": "ok", "message": "IA running"}
