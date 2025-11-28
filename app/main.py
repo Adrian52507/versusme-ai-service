@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from recommender import recommend_full
+from app.recommender import recommend_full
 
 app = FastAPI()
 

@@ -1,50 +1,63 @@
 import numpy as np
 import joblib
 import os
-
-MODEL_DIR = "./models"
-
 from tflite_runtime.interpreter import Interpreter
 
+MODEL_DIR = "/app/models"   # ruta correcta para Railway
 
-# --------------------------
-# LOAD MODELS ONLY ONCE
-# --------------------------
+# VARIABLES GLOBALES
 interpreter_diet = None
 interpreter_int = None
 scaler_X = None
-heart_model = None   # este será un modelo sklearn ya listo
+heart_model = None
 
 
+# ============================================================
+# LOAD MODELS ONCE (CORRECTO)
+# ============================================================
 def load_models_safely():
     global interpreter_diet, interpreter_int, scaler_X, heart_model
 
+    # Si ya están cargados → no recargar
     if interpreter_diet is not None:
-        return  # Ya cargados
+        return
 
-    # --- LOAD ANFIS DIET MODEL ---
+    print("📌 Cargando modelos de:", MODEL_DIR)
+
+    # Listar archivos para debug
+    try:
+        print("📂 Archivos en /app/models:", os.listdir(MODEL_DIR))
+    except Exception as e:
+        print("❌ ERROR listando modelos:", e)
+
+    # ANFIS DIET
     interpreter_diet = Interpreter(
         model_path=os.path.join(MODEL_DIR, "anfis_diet.tflite")
     )
     interpreter_diet.allocate_tensors()
 
-    # --- LOAD ANFIS INTENSITY MODEL ---
+    # ANFIS INTENSITY
     interpreter_int = Interpreter(
         model_path=os.path.join(MODEL_DIR, "anfis_int.tflite")
     )
     interpreter_int.allocate_tensors()
 
-    # --- LOAD SCALER ---
+    # SCALER
     scaler_X = joblib.load(os.path.join(MODEL_DIR, "scaler_X.joblib"))
 
-    # --- LOAD HEART MODEL ---
-    heart_model = joblib.load(os.path.join(MODEL_DIR, "heart_cols.joblib"))
+    # HEART ML MODEL
+    heart_model = joblib.load(os.path.join(MODEL_DIR, "heart_clf.joblib"))
+
+    print("✅ Modelos cargados correctamente")
 
 
-# --------------------------
+# ============================================================
 # MAIN RECOMMENDER
-# --------------------------
+# ============================================================
 def recommend_full(data):
+
+    # Asegurar que los modelos están cargados
+    load_models_safely()
 
     gender = data["gender"]
     age = float(data["age"])
@@ -53,10 +66,9 @@ def recommend_full(data):
     activity = float(data["activity_0_4"])
     goal = data["goal_str"]
 
-    # BMI
+    # --- BODY METRICS ---
     bmi = w / ((h / 100) ** 2)
 
-    # BMR
     if gender == "M":
         bmr = 10 * w + 6.25 * h - 5 * age + 5
     else:
@@ -64,29 +76,26 @@ def recommend_full(data):
 
     tdee = bmr * (1.2 + activity * 0.175)
 
-    # INPUT VECTOR
     X = np.array([[age, h, w, activity, bmi]])
 
     # SCALE
     Xs = scaler_X.transform(X)
 
-    # ---- HEART RISK ----
+    # --- HEART RISK ---
     heart_pred_proba = heart_model.predict_proba(Xs)[0, 1]
-    heart_bucket = "bajo"
     if heart_pred_proba > 0.66:
         heart_bucket = "alto"
     elif heart_pred_proba > 0.33:
         heart_bucket = "medio"
+    else:
+        heart_bucket = "bajo"
 
-    # ----------------------------
-    # ANFIS DIET MODEL PREDICTION
-    # ----------------------------
-    diet_input_index = interpreter_diet.get_input_details()[0]["index"]
-    diet_output_index = interpreter_diet.get_output_details()[0]["index"]
-
-    interpreter_diet.set_tensor(diet_input_index, Xs.astype(np.float32))
+    # --- ANFIS DIET ---
+    diet_in = interpreter_diet.get_input_details()[0]["index"]
+    diet_out = interpreter_diet.get_output_details()[0]["index"]
+    interpreter_diet.set_tensor(diet_in, Xs.astype(np.float32))
     interpreter_diet.invoke()
-    diet_value = interpreter_diet.get_tensor(diet_output_index)[0][0]
+    diet_value = interpreter_diet.get_tensor(diet_out)[0][0]
 
     if goal == "fat_burn":
         cal_target = tdee - 350
@@ -98,15 +107,12 @@ def recommend_full(data):
         cal_target = tdee
         diet_type = "mantenimiento"
 
-    # ----------------------------
-    # ANFIS INTENSITY MODEL
-    # ----------------------------
-    int_input_index = interpreter_int.get_input_details()[0]["index"]
-    int_output_index = interpreter_int.get_output_details()[0]["index"]
-
-    interpreter_int.set_tensor(int_input_index, Xs.astype(np.float32))
+    # --- ANFIS INTENSITY ---
+    int_in = interpreter_int.get_input_details()[0]["index"]
+    int_out = interpreter_int.get_output_details()[0]["index"]
+    interpreter_int.set_tensor(int_in, Xs.astype(np.float32))
     interpreter_int.invoke()
-    int_value = interpreter_int.get_tensor(int_output_index)[0][0]
+    int_value = interpreter_int.get_tensor(int_out)[0][0]
 
     if int_value < 0.33:
         int_level = "Baja"
@@ -139,14 +145,3 @@ def recommend_full(data):
             "tdee": round(tdee),
         },
     }
-def load_models_safely():
-    global scaler_X, heart_model, interpreter_diet, interpreter_int
-
-    print("📂 Listando archivos en /app:")
-    print(os.listdir("/app"))
-
-    print("📂 Listando archivos en /app/models:")
-    try:
-        print(os.listdir("/app/models"))
-    except:
-        print("❌ NO EXISTE /app/models")
