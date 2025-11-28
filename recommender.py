@@ -1,120 +1,141 @@
 import numpy as np
-import os
 import joblib
-import pandas as pd
-
-# Intentar usar tflite_runtime; si falla, usar tensorflow.lite
-try:
-    from tflite_runtime.interpreter import Interpreter
-    print("Using tflite_runtime")
-except ImportError:
-    from tensorflow.lite import Interpreter
-    print("Using tensorflow.lite")
+import os
 
 MODEL_DIR = "./models"
 
-interpreter_cal = None
+from tflite_runtime.interpreter import Interpreter
+
+
+# --------------------------
+# LOAD MODELS ONLY ONCE
+# --------------------------
+interpreter_diet = None
 interpreter_int = None
+scaler_X = None
+heart_model = None   # este será un modelo sklearn ya listo
 
 
-# 🔹 Cargar modelo TFLite ANFIS de forma segura
 def load_models_safely():
-    global interpreter_cal, interpreter_int
+    global interpreter_diet, interpreter_int, scaler_X, heart_model
 
-    if interpreter_cal is None:
-        interpreter_cal = Interpreter(
-            model_path=os.path.join(MODEL_DIR, "anfis_cal.tflite")
-        )
-        interpreter_cal.allocate_tensors()
+    if interpreter_diet is not None:
+        return  # Ya cargados
 
-    if interpreter_int is None:
-        interpreter_int = Interpreter(
-            model_path=os.path.join(MODEL_DIR, "anfis_int.tflite")
-        )
-        interpreter_int.allocate_tensors()
+    # --- LOAD ANFIS DIET MODEL ---
+    interpreter_diet = Interpreter(
+        model_path=os.path.join(MODEL_DIR, "anfis_diet.tflite")
+    )
+    interpreter_diet.allocate_tensors()
+
+    # --- LOAD ANFIS INTENSITY MODEL ---
+    interpreter_int = Interpreter(
+        model_path=os.path.join(MODEL_DIR, "anfis_int.tflite")
+    )
+    interpreter_int.allocate_tensors()
+
+    # --- LOAD SCALER ---
+    scaler_X = joblib.load(os.path.join(MODEL_DIR, "scaler_X.joblib"))
+
+    # --- LOAD HEART MODEL ---
+    heart_model = joblib.load(os.path.join(MODEL_DIR, "heart_cols.joblib"))
 
 
-# 🔹 Calcular BMR (Harris-Benedict)
-def compute_bmr(gender, weight, height, age):
+# --------------------------
+# MAIN RECOMMENDER
+# --------------------------
+def recommend_full(data):
+
+    gender = data["gender"]
+    age = float(data["age"])
+    h = float(data["height_cm"])
+    w = float(data["weight_kg"])
+    activity = float(data["activity_0_4"])
+    goal = data["goal_str"]
+
+    # BMI
+    bmi = w / ((h / 100) ** 2)
+
+    # BMR
     if gender == "M":
-        return 88.36 + (13.4 * weight) + (4.8 * height) - (5.7 * age)
+        bmr = 10 * w + 6.25 * h - 5 * age + 5
     else:
-        return 447.6 + (9.2 * weight) + (3.1 * height) - (4.3 * age)
+        bmr = 10 * w + 6.25 * h - 5 * age - 161
 
+    tdee = bmr * (1.2 + activity * 0.175)
 
-# 🔹 Recomendación completa (ejercicio + dieta + calorías)
-def recommend_full(payload):
-    load_models_safely()
+    # INPUT VECTOR
+    X = np.array([[age, h, w, activity, bmi]])
 
-    gender = payload["gender"]
-    age = payload["age"]
-    height = payload["height_cm"]
-    weight = payload["weight_kg"]
-    activity = payload["activity_0_4"]
-    goal = payload["goal_str"]
+    # SCALE
+    Xs = scaler_X.transform(X)
 
-    # ⭐ BMI
-    bmi = weight / ((height / 100) ** 2)
+    # ---- HEART RISK ----
+    heart_pred_proba = heart_model.predict_proba(Xs)[0, 1]
+    heart_bucket = "bajo"
+    if heart_pred_proba > 0.66:
+        heart_bucket = "alto"
+    elif heart_pred_proba > 0.33:
+        heart_bucket = "medio"
 
-    # ⭐ BMR
-    bmr = compute_bmr(gender, weight, height, age)
+    # ----------------------------
+    # ANFIS DIET MODEL PREDICTION
+    # ----------------------------
+    diet_input_index = interpreter_diet.get_input_details()[0]["index"]
+    diet_output_index = interpreter_diet.get_output_details()[0]["index"]
 
-    # ⭐ TDEE base (factor actividad estándar)
-    tdee = bmr * (1.2 + 0.15 * activity)
-
-    # ----------- ANFIS para calorías -----------
-    cal_input = np.array([[age, height, weight, activity]], dtype=np.float32)
-
-    cal_i = interpreter_cal.get_input_details()[0]
-    cal_o = interpreter_cal.get_output_details()[0]
-
-    interpreter_cal.set_tensor(cal_i["index"], cal_input)
-    interpreter_cal.invoke()
-    cal_pred = float(interpreter_cal.get_tensor(cal_o["index"])[0][0])
+    interpreter_diet.set_tensor(diet_input_index, Xs.astype(np.float32))
+    interpreter_diet.invoke()
+    diet_value = interpreter_diet.get_tensor(diet_output_index)[0][0]
 
     if goal == "fat_burn":
-        target_kcal = cal_pred - 350
-        diet_type = "Déficit moderado"
+        cal_target = tdee - 350
+        diet_type = "déficit"
     elif goal == "muscle_gain":
-        target_kcal = cal_pred + 250
-        diet_type = "Superávit controlado"
+        cal_target = tdee + 350
+        diet_type = "superávit"
     else:
-        target_kcal = cal_pred
-        diet_type = "Mantenimiento"
+        cal_target = tdee
+        diet_type = "mantenimiento"
 
-    # ----------- ANFIS para intensidad ejercicio -----------
-    int_input = np.array([[age, weight, activity]], dtype=np.float32)
-    int_i = interpreter_int.get_input_details()[0]
-    int_o = interpreter_int.get_output_details()[0]
+    # ----------------------------
+    # ANFIS INTENSITY MODEL
+    # ----------------------------
+    int_input_index = interpreter_int.get_input_details()[0]["index"]
+    int_output_index = interpreter_int.get_output_details()[0]["index"]
 
-    interpreter_int.set_tensor(int_i["index"], int_input)
+    interpreter_int.set_tensor(int_input_index, Xs.astype(np.float32))
     interpreter_int.invoke()
-    intensity_pred = float(interpreter_int.get_tensor(int_o["index"])[0][0])
+    int_value = interpreter_int.get_tensor(int_output_index)[0][0]
 
-    # Mapear intensidad a palabra
-    if intensity_pred < 0.4:
-        intensity = "Baja"
-        note = "Entrenamientos suaves, ideal para iniciar."
-    elif intensity_pred < 0.7:
-        intensity = "Media"
-        note = "Entrenamientos balanceados 3-4 veces por semana."
+    if int_value < 0.33:
+        int_level = "Baja"
+        int_note = "Ejercicio ligero recomendado."
+    elif int_value < 0.66:
+        int_level = "Media"
+        int_note = "Entrenamiento moderado ideal."
     else:
-        intensity = "Alta"
-        note = "Entrenamientos intensos, apto para usuarios avanzados."
+        int_level = "Alta"
+        int_note = "Rutina intensa sugerida."
 
-    # ----------- RESPUESTA FINAL (sin heart_risk) -----------
     return {
-        "exercise": {
-            "intensity": intensity,
-            "note": note
-        },
         "diet": {
             "type": diet_type,
-            "calorie_target_kcal": int(target_kcal)
+            "calorie_target_kcal": round(cal_target),
+            "score": float(diet_value),
+        },
+        "exercise": {
+            "intensity": int_level,
+            "note": int_note,
+            "score": float(int_value),
+        },
+        "heart_risk": {
+            "bucket": heart_bucket,
+            "prob": round(float(heart_pred_proba), 4),
         },
         "body": {
             "bmi": round(bmi, 2),
-            "bmr": int(bmr),
-            "tdee": int(tdee)
-        }
+            "bmr": round(bmr),
+            "tdee": round(tdee),
+        },
     }
