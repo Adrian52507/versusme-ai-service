@@ -139,3 +139,7 @@ def recommend_full(data):
             "tdee": round(tdee),
         },
     }
+def load_models_safely():
+    global interpreter_diet, interpreter_int, scaler_X, heart_model
+
+    print("📁 CONTENIDO DE ./models:", os.listdir(MODEL_DIR))
